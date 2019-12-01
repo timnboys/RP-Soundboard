@@ -36,11 +36,13 @@ public:
 		NOTIFY_SET_BUBBLE_COLS_BUILD,
 		NOTIFY_SET_SHOW_HOTKEYS_ON_BUTTONS,
 		NOTIFY_SET_HOTKEYS_ENABLED,
+		NOTIFY_SET_NEXT_UPDATE_CHECK,
 	};
 
 	class Observer
 	{
 	public:
+        virtual ~Observer() {}
 		virtual void notify(ConfigModel &model, notifications_e what, int data) = 0;
 	};
 
@@ -61,10 +63,10 @@ public:
 	const SoundInfo *getSoundInfo(int itemId) const;
 	void setSoundInfo(int itemId, const SoundInfo &info);
 
-	inline int getRows() const { return m_rows; }
+	inline int getRows() const { return m_rows[m_activeConfig]; }
 	void setRows(int n);
 
-	inline int getCols() const { return m_cols; }
+	inline int getCols() const { return m_cols[m_activeConfig]; }
 	void setCols(int n);
 
 	inline int getVolume() const { return m_volume; }
@@ -98,8 +100,13 @@ public:
 	void remObserver(Observer *obs);
 
     void setConfiguration(int config);
+	int getConfiguration();
 
 	const std::vector<SoundInfo> &sounds() const { return m_sounds[m_activeConfig]; }
+    int numSounds() const { return (int)sounds().size(); }
+
+	uint getNextUpdateCheck() const { return m_nextUpdateCheck; }
+	void setNextUpdateCheck(uint time);
 
 private:
 	std::vector<SoundInfo> &sounds() { return m_sounds[m_activeConfig]; }
@@ -112,8 +119,8 @@ private:
 	std::array<std::vector<SoundInfo>, NUM_CONFIGS> m_sounds;
 	int m_activeConfig;
 
-    int m_rows;
-	int m_cols;
+    std::array<int, NUM_CONFIGS> m_rows;
+	std::array<int, NUM_CONFIGS> m_cols;
 	int m_volume;
 	bool m_playbackLocal;
 	bool m_muteMyselfDuringPb;
@@ -126,6 +133,8 @@ private:
 
 	bool m_showHotkeysOnButtons;
 	bool m_hotkeysEnabled;
+
+	uint m_nextUpdateCheck;
 };
 
 #endif // rpsbsrc__ConfigModel_H__

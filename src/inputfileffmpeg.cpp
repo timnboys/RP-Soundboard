@@ -71,7 +71,7 @@ void InitFFmpegLibrary()
 }
 
 
-int LogFFmpegError(int code, char *msg = NULL)
+int LogFFmpegError(int code, const char *msg = NULL)
 {
 	if(code < 0)
 	{
@@ -363,7 +363,6 @@ int InputFileFFmpeg::readSamples(SampleProducer *sampleBuffer)
 	AVFrame *frame = av_frame_alloc();
 	AVPacket packet;
 	av_init_packet(&packet);
-	int sampleSize = av_samples_get_buffer_size(NULL, m_codecCtx->channels, 1, m_codecCtx->sample_fmt, 1);
 	int written = 0; //samples read
 
 	int properFrames = 0;
@@ -371,7 +370,6 @@ int InputFileFFmpeg::readSamples(SampleProducer *sampleBuffer)
 	{
 		if(packet.stream_index == m_streamIndex)
 		{
-			properFrames++;
 			AVPacket decodePacket = packet;
 			while(decodePacket.size > 0)
 			{
@@ -380,24 +378,29 @@ int InputFileFFmpeg::readSamples(SampleProducer *sampleBuffer)
 				// we can use it
 				int gotFrame = 0;
 				int consumed = avcodec_decode_audio4(m_codecCtx, frame, &gotFrame, &decodePacket);
-				if(consumed >= 0 && gotFrame)
+				if(consumed >= 0)
 				{
 					decodePacket.size -= consumed;
 					decodePacket.data += consumed;
-					m_decodedSamples += frame->nb_samples;
-					m_decodedSamplesTargetSR += getTargetSamples(frame->nb_samples, m_outputSamplerate, m_codecCtx->sample_rate);
-
-					//Resample
-					int res = handleDecoded(frame, sampleBuffer);
-					if(LogFFmpegError(res, "Unable to resample") < 0)
+					if (gotFrame)
 					{
-						av_free_packet(&packet);
-						av_frame_free(&frame);
-						return -1;
-					}
+						m_decodedSamples += frame->nb_samples;
+						m_decodedSamplesTargetSR += getTargetSamples(frame->nb_samples, m_outputSamplerate, m_codecCtx->sample_rate);
 
-					m_convertedSamples += res;
-					written += res;
+						//Resample
+						int res = handleDecoded(frame, sampleBuffer);
+						if (LogFFmpegError(res, "Unable to resample") < 0)
+						{
+							av_free_packet(&packet);
+							av_frame_free(&frame);
+							return -1;
+						}
+
+						m_convertedSamples += res;
+						written += res;
+						if (res > 0)
+							properFrames++;
+					}
 				}
 				else
 				{
@@ -418,12 +421,16 @@ int InputFileFFmpeg::readSamples(SampleProducer *sampleBuffer)
 			// Some codecs will cause frames to be buffered up in the decoding process. If the CODEC_CAP_DELAY flag
 			// is set, there can be buffered up frames that need to be flushed, so we'll do that
 
-			av_init_packet(&packet);
+			//av_init_packet(&packet);
+			packet.data = NULL;
+			packet.size = 0;
+
 			// Decode all the remaining frames in the buffer, until the end is reached
 			int gotFrame = 0;
 			while (avcodec_decode_audio4(m_codecCtx, frame, &gotFrame, &packet) >= 0 && gotFrame)
 			{
 				// We now have a fully decoded audio frame
+				properFrames++;
 				int res = handleDecoded(frame, sampleBuffer);
 				if(LogFFmpegError(res, "Unable to resample") < 0)
 				{
@@ -434,18 +441,17 @@ int InputFileFFmpeg::readSamples(SampleProducer *sampleBuffer)
 				written += res;
 			}
 		}
-		else
+
+		//Flush resampling
+		int res;
+		while(m_convertedSamples < m_decodedSamplesTargetSR && (res = handleDecoded(NULL, sampleBuffer)) > 0)
 		{
-			//Flush resampling
-			int res;
-			while(m_convertedSamples < m_decodedSamplesTargetSR && (res = handleDecoded(NULL, sampleBuffer)) > 0)
-			{
-				written += res;
-			}
-			m_done = true;
+			written += res;
 		}
+		m_done = true;
 	}
 
+	av_free_packet(&packet);
 	av_frame_free(&frame);
 
 	return written;
@@ -508,8 +514,11 @@ int InputFileFFmpeg::_close()
 int64_t InputFileFFmpeg::outputSamplesEstimation() const
 {
 	AVStream *stream = m_fmtCtx->streams[m_streamIndex];
-	return stream->duration * (int64_t)stream->time_base.num * 
-		(int64_t)m_outputSamplerate / (int64_t)stream->time_base.den;
+	if (stream->duration > 0)
+		return stream->duration * (int64_t)stream->time_base.num *
+			(int64_t)m_outputSamplerate / (int64_t)stream->time_base.den;
+	else
+		return m_fmtCtx->duration * m_outputSamplerate / AV_TIME_BASE;
 }
 
 

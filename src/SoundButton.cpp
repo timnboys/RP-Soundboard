@@ -48,7 +48,7 @@ void SoundButton::dragEnterEvent(QDragEnterEvent *evt)
 {
 	if (evt->mimeData()->hasUrls() || evt->mimeData()->hasFormat(getButtonMime()))
 	{
-		setStyleSheet("background-color: #99ccff;");
+		applyBackgroundColor(QColor(153, 204, 255));
 		evt->acceptProposedAction();
 	}
 }
@@ -67,11 +67,13 @@ void SoundButton::dragMoveEvent(QDragMoveEvent *evt)
 //---------------------------------------------------------------
 // Purpose: 
 //---------------------------------------------------------------
-void SoundButton::dragLeaveEvent(QDragLeaveEvent *evt)
+void SoundButton::dragLeaveEvent(QDragLeaveEvent *)
 {
+	sb_disableHotkeysTemporarily(false);
+
 	pressing = false;
 	dragging = false;
-	setBackgroundColor(backgroundColor);
+	applyBackgroundColor(backgroundColor);
 }
 
 
@@ -82,7 +84,7 @@ void SoundButton::dropEvent(QDropEvent *evt)
 {
 	pressing = false;
 	dragging = false;
-	setBackgroundColor(backgroundColor);
+	applyBackgroundColor(backgroundColor);
 	SoundButton *button = nullptr;
 	if (evt->mimeData()->hasUrls())
 	{
@@ -107,6 +109,13 @@ void SoundButton::dropEvent(QDropEvent *evt)
 //---------------------------------------------------------------
 void SoundButton::mousePressEvent(QMouseEvent *evt)
 {
+	// If the user has a hotkey 'switch config' bound to mouse 1 then
+	// this button is actually deleted before mouseReleaseEvent is called
+	// hence the clicked() signal is never emitted, resulting in silence
+	// instead of a lovely sound. Disabling hotkeys while a button is pressed
+	// is a workaround for this.
+	sb_disableHotkeysTemporarily(true);
+
 	pressing = true;
 	dragStart = evt->pos();
 	QPushButton::mousePressEvent(evt);
@@ -143,7 +152,15 @@ void SoundButton::mouseMoveEvent(QMouseEvent *evt)
 void SoundButton::setBackgroundColor(const QColor &color)
 {
 	backgroundColor = color;
-	
+	applyBackgroundColor(color);
+}
+
+
+//---------------------------------------------------------------
+// Purpose: 
+//---------------------------------------------------------------
+void SoundButton::applyBackgroundColor(const QColor & color)
+{
 	if (color.alpha() != 0)
 	{
 		float brightness = 0.2126f * color.redF() + 0.7152f * color.greenF() + 0.0722f * color.blueF();
@@ -160,6 +177,8 @@ void SoundButton::setBackgroundColor(const QColor &color)
 //---------------------------------------------------------------
 void SoundButton::mouseReleaseEvent(QMouseEvent *evt)
 {
+	sb_disableHotkeysTemporarily(false);
+
 	pressing = false;
 	dragging = false;
 	QPushButton::mouseReleaseEvent(evt);

@@ -32,7 +32,7 @@
 #define _strcpy(dest, destSize, src) { strncpy(dest, src, destSize-1); (dest)[destSize-1] = '\0'; }
 #endif
 
-#define PLUGIN_API_VERSION 22
+#define PLUGIN_API_VERSION 23
 
 
 
@@ -155,14 +155,40 @@ void ts3plugin_registerPluginID(const char* id)
 /* Plugin command keyword. Return NULL or "" if not used. */
 const char* ts3plugin_commandKeyword() 
 {
-	return "ts3sb";
+	return "rpsb";
 }
 
-///* Plugin processes console command. Return 0 if plugin handled the command, 1 if not handled. */
-//int ts3plugin_processCommand(uint64 serverConnectionHandlerID, const char* command) 
-//{
-//	return 1;
-//}
+/* Plugin processes console command. Return 0 if plugin handled the command, 1 if not handled. */
+int ts3plugin_processCommand(uint64 serverConnectionHandlerID, const char* command) 
+{
+	char* args[3]; // <[conf] <snd>|<stop>> -> max 2, 3+ == error
+	char* token; //last strtok result
+	int argc = 0; //number of arguments
+	
+	char* tokanize = strdup(command); //create working copy of command for strtok that is not const
+	if (tokanize != NULL)
+	{
+		token = strtok((char*)tokanize, " ");
+		while (token != NULL && argc < 3) //read next token, but not more than 3
+		{
+			args[argc++] = token; //append token, increase arg counter
+			token = strtok(NULL, " "); //try to read next token
+		}
+		free(tokanize);
+	}
+
+	//convert string to lower (if you know a lib you can use it)
+	for (int a = 0; a<argc; a++)
+	{
+		char* b = args[argc];
+		for (; *b != 0; b++)
+			//assuming ascii encoding, turning on the 6th bit (value equals space) will convert it to lower case
+			if (*b >= 'A' && *b <= 'Z')
+				*b |= ' '; // tuning on 6th bit, converting upper case letters to lower case (see ascii table)
+	}
+
+	return sb_parseCommand(args, argc);
+}
 
 /* Client changed current server connection handler */
 void ts3plugin_currentServerConnectionChanged(uint64 serverConnectionHandlerID) 
@@ -211,7 +237,8 @@ static struct PluginMenuItem* createMenuItem(enum PluginMenuType type, int id, c
  */
 enum {
 	MENU_ID_SHOW_CONFIG = 1,
-	MENU_ID_SHOW_ABOUT
+	MENU_ID_SHOW_ABOUT,
+	MENU_ID_CHECK_FOR_UPDATES,
 };
 
 /*
@@ -239,9 +266,10 @@ void ts3plugin_initMenus(struct PluginMenuItem*** menuItems, char** menuIcon)
 	 * e.g. for "test_plugin.dll", icon "1.png" is loaded from <TeamSpeak 3 Client install dir>\plugins\test_plugin\1.png
 	 */
 
-	BEGIN_CREATE_MENUS(2);  /* IMPORTANT: Number of menu items must be correct! */
+	BEGIN_CREATE_MENUS(3);  /* IMPORTANT: Number of menu items must be correct! */
 	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_GLOBAL,  MENU_ID_SHOW_CONFIG,  "Open Soundboard",  "rpmb_icon_16.png");
 	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_GLOBAL,  MENU_ID_SHOW_ABOUT,  "About",  "rpmb_icon_16.png");
+	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_GLOBAL, MENU_ID_CHECK_FOR_UPDATES, "Check for update", "rpmb_icon_16.png");
 	END_CREATE_MENUS;  /* Includes an assert checking if the number of menu items matched */
 
 	/*
@@ -290,8 +318,7 @@ void ts3plugin_initHotkeys(struct PluginHotkey*** hotkeys)
 	 * The description is shown in the clients hotkey dialog. */
 	int i;
 	int numKeys = 200;
-	int numConfigs = 4;
-	int numExtra = 6;
+	int numExtra = NUM_CONFIGS + 6;
 	char kw[PLUGIN_HOTKEY_BUFSZ];
 	char desc[PLUGIN_HOTKEY_BUFSZ];
 
@@ -310,8 +337,12 @@ void ts3plugin_initHotkeys(struct PluginHotkey*** hotkeys)
 		CREATE_HOTKEY(kw, desc);
 	}
 
-    CREATE_HOTKEY("stop_all", "Stop all sounds");
-	CREATE_HOTKEY("pause_all", "Pause/unpause sound");
+    CREATE_HOTKEY(HOTKEY_STOP_ALL, "Stop all sounds");
+	CREATE_HOTKEY(HOTKEY_PAUSE_ALL, "Pause/unpause sound");
+	CREATE_HOTKEY(HOTKEY_MUTE_MYSELF, "Toggle 'Mute myself during playback'");
+	CREATE_HOTKEY(HOTKEY_MUTE_ON_MY_CLIENT, "Toggle 'Mute on my client'");
+	CREATE_HOTKEY(HOTKEY_VOLUME_INCREASE, "Increase volume by 20%");
+	CREATE_HOTKEY(HOTKEY_VOLUME_DECREASE, "Decrease volume by 20%");
 	END_CREATE_HOTKEYS;
 
 	/* The client will call ts3plugin_freeMemory to release all allocated memory */
@@ -388,10 +419,6 @@ void ts3plugin_onEditCapturedVoiceDataEvent(uint64 serverConnectionHandlerID, sh
 	sb_handleCaptureData(serverConnectionHandlerID, samples, sampleCount, channels, edited);
 }
 
-PLUGINS_EXPORTDLL void ts3plugin_onCustom3dRolloffCalculationClientEvent(uint64 serverConnectionHandlerID, anyID clientID, float distance, float * volume)
-{
-    
-}
 
 /*
  * Called when a plugin menu item (see ts3plugin_initMenus) is triggered. Optional function, when not using plugin menus, do not implement this.
@@ -415,6 +442,9 @@ void ts3plugin_onMenuItemEvent(uint64 serverConnectionHandlerID, enum PluginMenu
 				case MENU_ID_SHOW_ABOUT:
 					sb_openAbout();
 					break;
+				case MENU_ID_CHECK_FOR_UPDATES:
+					sb_checkForUpdates();
+					break;
 				default:
 					break;
 			}
@@ -427,23 +457,7 @@ void ts3plugin_onMenuItemEvent(uint64 serverConnectionHandlerID, enum PluginMenu
 /* This function is called if a plugin hotkey was pressed. Omit if hotkeys are unused. */
 void ts3plugin_onHotkeyEvent(const char* keyword) 
 {
-	int btn = -1;
-	if(sscanf(keyword, "button_%i", &btn) > 0)
-	{
-		sb_playButton(btn - 1);
-	}
-    else if (sscanf(keyword, "config_%i", &btn) > 0)
-    {
-        sb_setConfig(btn);
-    }
-	else if(strcmp(keyword, "stop_all") == 0)
-	{
-		sb_stopPlayback();
-	}
-	else if (strcmp(keyword, "pause_all") == 0)
-	{
-		sb_pauseButtonPressed();
-	}
+	sb_onHotkeyPressed(keyword);
 }
 
 

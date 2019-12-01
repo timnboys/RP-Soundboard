@@ -43,7 +43,6 @@ public:
 
 
 static uint64 activeServerId = 1;
-static uint64 playingServerId = 1;
 
 ConfigModel *configModel = NULL;
 SpeechBubble *notConnectedBubble = NULL;
@@ -51,6 +50,8 @@ ConfigQt *configDialog = NULL;
 AboutQt *aboutDialog = NULL;
 Sampler *sampler = NULL;
 TalkStateManager *tsMgr = NULL;
+
+bool hotkeysTemporarilyDisabled = false;
 
 ModelObserver_Prog *modelObserver = NULL;
 UpdateChecker *updateChecker = NULL;
@@ -147,30 +148,32 @@ CAPI void sb_init()
 
 	InitFFmpegLibrary();
 
-	configModel = new ConfigModel();
-	configModel->readConfig();
+	QTimer::singleShot(10, []{
+		configModel = new ConfigModel();
+		configModel->readConfig();
 
-    /* This if first QObject instantiated, it will load the resources */
-	sampler = new Sampler();
-	sampler->init();
+		/* This if first QObject instantiated, it will load the resources */
+		sampler = new Sampler();
+		sampler->init();
 
-	tsMgr = new TalkStateManager();
-    QObject::connect(sampler, &Sampler::onStartPlaying,   tsMgr, &TalkStateManager::onStartPlaying, Qt::QueuedConnection);
-	QObject::connect(sampler, &Sampler::onStopPlaying,    tsMgr, &TalkStateManager::onStopPlaying, Qt::QueuedConnection);
-	QObject::connect(sampler, &Sampler::onPausePlaying,   tsMgr, &TalkStateManager::onPauseSound, Qt::QueuedConnection);
-	QObject::connect(sampler, &Sampler::onUnpausePlaying, tsMgr, &TalkStateManager::onUnpauseSound, Qt::QueuedConnection);
+		tsMgr = new TalkStateManager();
+		QObject::connect(sampler, &Sampler::onStartPlaying, tsMgr, &TalkStateManager::onStartPlaying, Qt::QueuedConnection);
+		QObject::connect(sampler, &Sampler::onStopPlaying, tsMgr, &TalkStateManager::onStopPlaying, Qt::QueuedConnection);
+		QObject::connect(sampler, &Sampler::onPausePlaying, tsMgr, &TalkStateManager::onPauseSound, Qt::QueuedConnection);
+		QObject::connect(sampler, &Sampler::onUnpausePlaying, tsMgr, &TalkStateManager::onUnpauseSound, Qt::QueuedConnection);
 
-	configDialog = new ConfigQt(configModel);
-	//configDialog->showMinimized();
-	//configDialog->hide();
+		configDialog = new ConfigQt(configModel);
+		//configDialog->showMinimized();
+		//configDialog->hide();
 
-	modelObserver = new ModelObserver_Prog();
-	configModel->addObserver(modelObserver);
+		modelObserver = new ModelObserver_Prog();
+		configModel->addObserver(modelObserver);
 
-	configModel->notifyAllEvents();
+		configModel->notifyAllEvents();
 
-	updateChecker = new UpdateChecker();
-	updateChecker->startCheck();
+		updateChecker = new UpdateChecker();
+		updateChecker->startCheck(false, configModel);
+	});
 }
 
 
@@ -261,6 +264,28 @@ CAPI void sb_pauseButtonPressed()
 		sb_unpauseSound();
 }
 
+/** play button by name or index(strtol), return 0 on success */
+CAPI int sb_playButtonEx(const char* button)
+{
+	long arg1 = strtol(button, NULL, 10);
+
+	if ((NULL != configDialog) && (configDialog->hotkeysEnabled()))
+	{
+		if (arg1 <= 0)
+		{
+			//TODO search by name, too lazy right now
+		}
+		else
+		{
+			const SoundInfo *sound = configModel->getSoundInfo(arg1);
+			if (sound)
+				sb_playFile(*sound);
+			else
+				return 1;
+		}
+	}
+	return 0;
+}
 
 CAPI void sb_playButton(int btn)
 {
@@ -288,7 +313,9 @@ CAPI void sb_openAbout()
 
 CAPI void sb_onConnectStatusChange(uint64 serverConnectionHandlerID, int newStatus, unsigned int errorNumber) 
 {
-	if(newStatus == STATUS_DISCONNECTED)
+    Q_UNUSED(errorNumber)
+
+    if(newStatus == STATUS_DISCONNECTED)
 		connectionStatusMap.erase(serverConnectionHandlerID);
 	else
 		connectionStatusMap[serverConnectionHandlerID] = newStatus;
@@ -326,3 +353,88 @@ CAPI void sb_onStopTalking()
 	tsMgr->onClientStopsTalking();
 }
 
+CAPI void sb_onHotkeyPressed(const char * keyword)
+{
+	if (hotkeysTemporarilyDisabled)
+		return;
+
+	int btn = -1;
+	if (sscanf(keyword, "button_%i", &btn) > 0)
+	{
+		sb_playButton(btn - 1);
+	}
+	else if (sscanf(keyword, "config_%i", &btn) > 0)
+	{
+		sb_setConfig(btn);
+	}
+	else if (strcmp(keyword, HOTKEY_STOP_ALL) == 0)
+	{
+		sb_stopPlayback();
+	}
+	else if (strcmp(keyword, HOTKEY_PAUSE_ALL) == 0)
+	{
+		sb_pauseButtonPressed();
+	}
+	else if (strcmp(keyword, HOTKEY_MUTE_MYSELF) == 0)
+	{
+		configModel->setMuteMyselfDuringPb(!configModel->getMuteMyselfDuringPb());
+	}
+	else if (strcmp(keyword, HOTKEY_MUTE_ON_MY_CLIENT) == 0)
+	{
+		configModel->setPlaybackLocal(!configModel->getPlaybackLocal());
+	}
+	else if (strcmp(keyword, HOTKEY_VOLUME_INCREASE) == 0)
+	{
+		configModel->setVolume(std::min(configModel->getVolume() + 20, 100));
+	}
+	else if (strcmp(keyword, HOTKEY_VOLUME_DECREASE) == 0)
+	{
+		configModel->setVolume(std::max(configModel->getVolume() - 20, 0));
+	}
+}
+
+
+CAPI void sb_checkForUpdates()
+{
+	if (!updateChecker)
+		updateChecker = new UpdateChecker();
+	updateChecker->startCheck(true);
+}
+
+/** return 0 if the command was handled, 1 otherwise */
+CAPI int sb_parseCommand(char** args, int argc)
+{
+	if (argc >= 3)
+		ts3Functions.printMessageToCurrentTab("Too many arguments");
+	else if (argc == 0)
+		sb_openDialog();
+	else if (argc == 1)
+	{
+		long arg1 = strtol(args[0], NULL, 10);
+		if (strcmp(args[0], "stop")==0)
+			sb_stopPlayback();
+		else if (strcmp(args[0], "-?") == 0)
+			ts3Functions.printMessageToCurrentTab("Arguments: 'stop' to stop playback or '[configuration number] <button number>'");
+		else if (sb_playButtonEx(args[0]) != 0)
+			ts3Functions.printMessageToCurrentTab("No such button found");
+	}
+	else if (argc == 2)
+	{
+		long arg0 = strtol(args[0], NULL, 10);
+		int pconfig = configModel->getConfiguration(); //TODO ConfigModel::getConfiguration() { return m_activeConfig; }
+		if (arg0 < 1 || arg0 > 4)
+			ts3Functions.printMessageToCurrentTab("Invalid configuration number");
+		configModel->setConfiguration((int)arg0); //switch to specified configuration
+		if (sb_playButtonEx(args[0]) != 0)
+			ts3Functions.printMessageToCurrentTab("No such button found");
+		configModel->setConfiguration(pconfig); //return to previous configuration
+
+	}
+	return 0;
+}
+
+
+CAPI void sb_disableHotkeysTemporarily(bool disable)
+{
+	hotkeysTemporarilyDisabled = disable;
+}

@@ -34,6 +34,7 @@ CAPI void sb_kill();
 CAPI void sb_onServerChange(uint64 serverID);
 CAPI void sb_saveConfig();
 CAPI void sb_openDialog();
+CAPI int sb_playButtonEx(const char* btn);
 CAPI void sb_playButton(int btn);
 CAPI void sb_setConfig(int cfg);
 CAPI void sb_openAbout();
@@ -45,5 +46,17 @@ CAPI void sb_getInternalHotkeyName(int buttonId, char *buf); // buf should be at
 CAPI void sb_getInternalConfigHotkeyName(int configId, char *buf);
 CAPI void sb_onHotkeyRecordedEvent(const char *keyword, const char *key);
 CAPI void sb_onStopTalking();
+CAPI void sb_onHotkeyPressed(const char *keyword);
+CAPI void sb_checkForUpdates();
+CAPI int sb_parseCommand(char**, int);
+CAPI void sb_disableHotkeysTemporarily(bool disable);
+
+
+#define HOTKEY_STOP_ALL "stop_all"
+#define HOTKEY_PAUSE_ALL "pause_all"
+#define HOTKEY_MUTE_MYSELF "mute_myself"
+#define HOTKEY_MUTE_ON_MY_CLIENT "mute_on_my_client"
+#define HOTKEY_VOLUME_INCREASE "volume_increase"
+#define HOTKEY_VOLUME_DECREASE "volume_decrease"
 
 #endif
